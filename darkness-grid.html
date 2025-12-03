@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Warden Darkness Coverage Planner</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 0;
+            padding: 16px;
+            background: #111827;
+            color: #e5e7eb;
+        }
+        h1 {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+        .container {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .panel {
+            background: #1f2937;
+            border-radius: 8px;
+            padding: 12px 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            box-sizing: border-box;
+        }
+        .panel.inputs {
+            max-width: 360px;
+            flex: 1 1 260px;
+        }
+        .panel.outputs {
+            max-width: 260px;
+            flex: 1 1 220px;
+        }
+        .panel canvas-panel {
+            flex: 1 1 400px;
+        }
+        label {
+            display: block;
+            font-size: 13px;
+            margin-bottom: 4px;
+            color: #9ca3af;
+        }
+        input[type="number"] {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 6px 8px;
+            border-radius: 4px;
+            border: 1px solid #4b5563;
+            background: #111827;
+            color: #f9fafb;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #60a5fa;
+            box-shadow: 0 0 0 1px #60a5fa55;
+        }
+        button {
+            margin-top: 4px;
+            padding: 8px 12px;
+            border-radius: 4px;
+            border: none;
+            font-size: 14px;
+            cursor: pointer;
+            background: #2563eb;
+            color: #f9fafb;
+        }
+        button:hover {
+            background: #1d4ed8;
+        }
+        .outputs-grid {
+            display: grid;
+            grid-template-columns: auto auto;
+            gap: 4px 10px;
+            font-size: 13px;
+        }
+        .outputs-grid div.label {
+            color: #9ca3af;
+        }
+        .outputs-grid div.value {
+            font-variant-numeric: tabular-nums;
+            text-align: right;
+        }
+        canvas {
+            background: #030712;
+            border-radius: 8px;
+            border: 1px solid #374151;
+            display: block;
+        }
+        .hint {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 6px;
+        }
+    </style>
+</head>
+<body>
+<h1>Warden Darkness Coverage Planner</h1>
+<div class="container">
+    <div class="panel inputs">
+        <h2 style="font-size:16px;margin-top:0;">Inputs</h2>
+        <label for="gridSize">Grid size (blocks, gridSize × gridSize)</label>
+        <input type="number" id="gridSize" value="400" min="1" />
+
+        <label for="radius">Radius (warden darkness radius)</label>
+        <input type="number" id="radius" value="21" min="1" />
+
+        <label for="xOverlap">X overlap (blocks)</label>
+        <input type="number" id="xOverlap" value="6" min="0" />
+
+        <label for="yOverlap">Y overlap (blocks)</label>
+        <input type="number" id="yOverlap" value="6" min="0" />
+
+        <button id="recalcBtn">Recalculate &amp; Draw</button>
+        <div class="hint">
+            Hex pattern: every odd row is offset by half the X distance.
+        </div>
+    </div>
+
+    <div class="panel outputs">
+        <h2 style="font-size:16px;margin-top:0;">Outputs</h2>
+        <div class="outputs-grid">
+            <div class="label">Req (zones)</div>
+            <div class="value" id="outReq">–</div>
+
+            <div class="label">1st X</div>
+            <div class="value" id="outFirstX">–</div>
+
+            <div class="label">1st Y</div>
+            <div class="value" id="outFirstY">–</div>
+
+            <div class="label">X Dist</div>
+            <div class="value" id="outXDist">–</div>
+
+            <div class="label">Y Dist</div>
+            <div class="value" id="outYDist">–</div>
+
+            <div class="label">Nx × Ny</div>
+            <div class="value" id="outNxNy">–</div>
+        </div>
+    </div>
+
+    <div class="panel" style="flex: 1 1 420px;">
+        <h2 style="font-size:16px;margin-top:0;">Visualization</h2>
+        <canvas id="canvas" width="500" height="500"></canvas>
+        <div class="hint">
+            Black square = grid area. Cyan circles = effect zones (radius).
+            Staggered rows form a hex-style pattern.
+        </div>
+    </div>
+</div>
+
+<script>
+    const gridSizeInput = document.getElementById("gridSize");
+    const radiusInput = document.getElementById("radius");
+    const xOverlapInput = document.getElementById("xOverlap");
+    const yOverlapInput = document.getElementById("yOverlap");
+    const recalcBtn = document.getElementById("recalcBtn");
+
+    const outReq = document.getElementById("outReq");
+    const outFirstX = document.getElementById("outFirstX");
+    const outFirstY = document.getElementById("outFirstY");
+    const outXDist = document.getElementById("outXDist");
+    const outYDist = document.getElementById("outYDist");
+    const outNxNy = document.getElementById("outNxNy");
+
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    function computeAndDraw() {
+        const gridSize = parseFloat(gridSizeInput.value) || 400;
+        const R = parseFloat(radiusInput.value) || 20;
+        let xOverlap = parseFloat(xOverlapInput.value) || 0;
+        let yOverlap = parseFloat(yOverlapInput.value) || 0;
+
+        // Clamp overlap so distances stay positive
+        const maxOverlap = 2 * R - 0.001;
+        xOverlap = Math.min(Math.max(0, xOverlap), maxOverlap);
+        yOverlap = Math.min(Math.max(0, yOverlap), maxOverlap);
+
+        if (xOverlap !== parseFloat(xOverlapInput.value)) {
+            xOverlapInput.value = xOverlap.toFixed(3);
+        }
+        if (yOverlap !== parseFloat(yOverlapInput.value)) {
+            yOverlapInput.value = yOverlap.toFixed(3);
+        }
+
+        const XDist = 2 * R - xOverlap;
+        const YDist = 2 * R - yOverlap;
+
+        // Number of centers per row / column
+        const Nx = Math.ceil((gridSize - 2 * R) / XDist) + 1;
+        const Ny = Math.ceil((gridSize - 2 * R) / YDist) + 1;
+
+        const totalWidth = 2 * R + (Nx - 1) * XDist;
+        const totalHeight = 2 * R + (Ny - 1) * YDist;
+
+        const slackX = totalWidth - gridSize;
+        const slackY = totalHeight - gridSize;
+
+        const firstX = R - slackX / 2;
+        const firstY = R - slackY / 2;
+
+        const Req = Nx * Ny;
+
+        // Update outputs
+        const f = (n) => n.toFixed(2);
+        outReq.textContent = Req;
+        outFirstX.textContent = f(firstX);
+        outFirstY.textContent = f(firstY);
+        outXDist.textContent = f(XDist);
+        outYDist.textContent = f(YDist);
+        outNxNy.textContent = `${Nx} × ${Ny}`;
+
+        draw(gridSize, R, XDist, YDist, firstX, firstY, Nx, Ny);
+    }
+
+    function draw(gridSize, R, XDist, YDist, firstX, firstY, Nx, Ny) {
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const margin = 20;
+        const scale = Math.min(
+            (w - 2 * margin) / gridSize,
+            (h - 2 * margin) / gridSize
+        );
+
+        const offsetX = (w - gridSize * scale) / 2;
+        const offsetY = (h - gridSize * scale) / 2;
+
+        // Draw grid boundary
+        ctx.save();
+        ctx.translate(offsetX, offsetY);
+
+        ctx.fillStyle = "#020617";
+        ctx.fillRect(0, 0, gridSize * scale, gridSize * scale);
+
+        ctx.strokeStyle = "#4b5563";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(0, 0, gridSize * scale, gridSize * scale);
+
+        // Draw effect circles
+        ctx.lineWidth = 1;
+
+        for (let row = 0; row < Ny; row++) {
+            const y = firstY + row * YDist;
+            const xRowStart = firstX + (row % 2 === 1 ? XDist / 2 : 0);
+
+            for (let col = 0; col < Nx; col++) {
+                const x = xRowStart + col * XDist;
+
+                // Skip circles that are far outside for performance, but allow slight overhang
+                if (x < -2 * R || x > gridSize + 2 * R || y < -2 * R || y > gridSize + 2 * R) {
+                    continue;
+                }
+
+                const cx = x * scale;
+                const cy = y * scale;
+                const r = R * scale;
+
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+
+                ctx.strokeStyle = "rgba(34,197,235,0.9)";
+                ctx.stroke();
+
+                ctx.fillStyle = "rgba(34,197,235,0.06)";
+                ctx.fill();
+            }
+        }
+
+        ctx.restore();
+    }
+
+    recalcBtn.addEventListener("click", computeAndDraw);
+
+    // Also recompute on input changes
+    [gridSizeInput, radiusInput, xOverlapInput, yOverlapInput].forEach((el) => {
+        el.addEventListener("change", computeAndDraw);
+        el.addEventListener("input", () => {
+            // lightweight debounce
+            clearTimeout(el._t);
+            el._t = setTimeout(computeAndDraw, 200);
+        });
+    });
+
+    computeAndDraw();
+</script>
+</body>
+</html>
